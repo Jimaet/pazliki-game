@@ -54,7 +54,8 @@ if(!raw)return defaultSave();
 const parsed=JSON.parse(raw);
 const base=defaultSave();
 return{
-...base,...parsed,
+...base,
+...parsed,
 progress:{
 easy:Array.isArray(parsed.progress?.easy)?[...parsed.progress.easy,...Array(20).fill(false)].slice(0,20):base.progress.easy,
 medium:Array.isArray(parsed.progress?.medium)?[...parsed.progress.medium,...Array(20).fill(false)].slice(0,20):base.progress.medium,
@@ -62,16 +63,27 @@ hard:Array.isArray(parsed.progress?.hard)?[...parsed.progress.hard,...Array(20).
 },
 best:parsed.best||{}
 };
-}catch{return defaultSave()}
+}catch{
+return defaultSave();
+}
 }
 function saveLocal(){
-try{localStorage.setItem(SAVE_KEY,JSON.stringify(state.save))}catch{}
+try{
+localStorage.setItem(SAVE_KEY,JSON.stringify(state.save));
+}catch{}
 }
 async function cloudSave(){
 saveLocal();
 if(!state.sdk?.player?.isAuthorized)return;
 try{
-await fetch("/api/save",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({player:state.sdk.player,save:state.save})});
+await fetch("/api/save",{
+method:"POST",
+headers:{"Content-Type":"application/json"},
+body:JSON.stringify({
+player:state.sdk.player,
+save:state.save
+})
+});
 }catch{}
 }
 async function cloudLoad(){
@@ -81,14 +93,22 @@ const r=await fetch(`/api/save?playerId=${encodeURIComponent(state.sdk.player.id
 if(!r.ok)return;
 const data=await r.json();
 if(data?.save){
-state.save={...state.save,...data.save,progress:{...state.save.progress,...data.save.progress}};
+state.save={
+...state.save,
+...data.save,
+progress:{
+...state.save.progress,
+...data.save.progress
+}
+};
 saveLocal();
 }
 }catch{}
 }
 function showScreen(id){
 document.querySelectorAll(".screen").forEach(s=>s.classList.remove("active"));
-$(id).classList.add("active");
+const screen=$(id);
+if(screen)screen.classList.add("active");
 }
 function imagePreload(){
 const promises=[];
@@ -105,26 +125,37 @@ return Promise.all(promises);
 async function boot(){
 state.save=loadLocal();
 const images=imagePreload();
-let sdkPromise=Promise.race([window.pikabuSDKReady,sleep(4500).then(()=>null)]);
+let sdkPromise=window.pikabuSDKReady?Promise.race([window.pikabuSDKReady,sleep(4500).then(()=>null)]):Promise.resolve(null);
 const sdk=await sdkPromise;
 state.sdk=sdk;
 await images;
 if(state.sdk){
 try{
-if(state.sdk.ads?.preloader?.isSupported&&state.sdk.ads.preloader.isSupported()){
-if(state.sdk.ads.preloader.canShow&&state.sdk.ads.preloader.canShow())await state.sdk.ads.preloader.show();
+const preloader=state.sdk.ads?.preloader;
+if(preloader?.isSupported){
+const canShow=await preloader.canShow();
+if(canShow){
+await preloader.show();
 }
-}catch{}
+}
+}catch(error){
+console.warn("Preloader ad error:",error);
+}
 }
 startSDK();
-$("bootStatus").textContent="Готово";
+if($("bootStatus"))$("bootStatus").textContent="Готово";
 await sleep(250);
 showScreen("menuScreen");
 renderMenu();
 }
 function startSDK(){
 if(state.sdk&&!state.sdkStarted){
-try{state.sdk.gameStarted();state.sdkStarted=true}catch{}
+try{
+state.sdk.gameStarted();
+state.sdkStarted=true;
+}catch(error){
+console.warn("SDK gameStarted error:",error);
+}
 }
 }
 function renderMenu(){
@@ -176,7 +207,9 @@ state.hintPiece=null;
 state.hintTarget=null;
 const total=state.size*state.size;
 let board;
-do{board=shuffleArray(Array.from({length:total},(_,i)=>i))}while(board.every((v,i)=>v===i));
+do{
+board=shuffleArray(Array.from({length:total},(_,i)=>i));
+}while(board.every((v,i)=>v===i));
 state.board=board;
 $("gameLevel").textContent=level+1;
 $("movesValue").textContent="0";
@@ -255,7 +288,10 @@ $("timeValue").textContent=formatTime(state.seconds);
 },1000);
 }
 function stopTimer(){
-if(state.timer){clearInterval(state.timer);state.timer=null}
+if(state.timer){
+clearInterval(state.timer);
+state.timer=null;
+}
 }
 function formatTime(seconds){
 const m=String(Math.floor(seconds/60)).padStart(2,"0");
@@ -267,7 +303,9 @@ state.locked=true;
 stopTimer();
 const key=`${state.difficulty}_${state.level}`;
 const old=state.save.best[key];
-if(!old||state.seconds<old.time)state.save.best[key]={time:state.seconds,moves:state.moves};
+if(!old||state.seconds<old.time){
+state.save.best[key]={time:state.seconds,moves:state.moves};
+}
 if(!state.save.progress[state.difficulty][state.level]){
 state.save.progress[state.difficulty][state.level]=true;
 state.save.totalCompleted++;
@@ -296,61 +334,89 @@ return"Картинка полностью собрана";
 async function closeResultAndContinue(){
 $("resultModal").classList.remove("active");
 if(state.level<19){
+const shouldShowAd=state.completedSinceAd>=3;
+if(shouldShowAd){
+await tryFullscreenAd();
+}
 state.locked=false;
 startLevel(state.level+1);
-await tryFullscreenAd();
 }else{
 state.locked=false;
 openLevels(state.difficulty);
 }
 }
 async function tryFullscreenAd(){
-if(state.completedSinceAd<3||state.fullscreenUnavailable)return;
+if(state.completedSinceAd<3||state.fullscreenUnavailable)return false;
 const ad=state.sdk?.ads?.fullscreen;
-if(!ad?.isSupported||!ad.isSupported()){
+if(!ad){
+return false;
+}
+if(!ad.isSupported){
 state.fullscreenUnavailable=true;
-return;
+return false;
 }
 try{
-if(!ad.canShow||!ad.canShow())return;
+const canShow=await ad.canShow();
+if(!canShow)return false;
 state.paused=true;
 const result=await ad.show();
 state.paused=false;
-if(result?.success!==false)state.completedSinceAd=0;
-}catch{
+if(result?.rendered===true){
+state.completedSinceAd=0;
+return true;
+}
+console.warn("Fullscreen ad was not rendered:",result?.reason||"UNKNOWN");
+return false;
+}catch(error){
 state.paused=false;
+console.warn("Fullscreen ad error:",error);
+return false;
 }
 }
 async function showHint(){
 if(state.locked||state.paused||state.hintPiece!==null)return;
 const ad=state.sdk?.ads?.rewarded;
-if(!ad?.isSupported||!ad.isSupported()){
+if(!ad){
+showToast("Подсказка сейчас недоступна");
+return;
+}
+if(!ad.isSupported){
 state.rewardedUnavailable=true;
 showToast("Подсказка сейчас недоступна");
 return;
 }
 try{
-if(!ad.canShow||!ad.canShow()){
+const canShow=await ad.canShow();
+if(!canShow){
 showToast("Подсказка сейчас недоступна");
 return;
 }
 state.paused=true;
 const result=await ad.show();
 state.paused=false;
-if(result?.reward!==true){
-showToast("Награда не получена");
+if(!result?.rendered){
+console.warn("Rewarded ad was not rendered:",result?.reason||"UNKNOWN");
+showToast("Реклама сейчас недоступна");
+return;
+}
+if(result.reward!==true){
+showToast("Реклама не просмотрена полностью");
 return;
 }
 applyHint();
-}catch{
+}catch(error){
 state.paused=false;
+console.warn("Rewarded ad error:",error);
 showToast("Не удалось показать рекламу");
 }
 }
 function applyHint(){
 let wrong=-1;
 for(let i=0;i<state.board.length;i++){
-if(state.board[i]!==i){wrong=i;break}
+if(state.board[i]!==i){
+wrong=i;
+break;
+}
 }
 if(wrong<0)return;
 const piece=state.board[wrong];
@@ -369,6 +435,7 @@ renderBoard();
 }
 function showToast(text){
 const toast=$("hintToast");
+if(!toast)return;
 toast.textContent=text;
 toast.classList.add("active");
 clearTimeout(showToast.timer);
@@ -378,7 +445,9 @@ function openSource(){
 $("sourceImage").src=IMAGE_PATH(state.level+1);
 $("sourceModal").classList.add("active");
 }
-function closeSource(){$("sourceModal").classList.remove("active")}
+function closeSource(){
+$("sourceModal").classList.remove("active");
+}
 function pauseGame(){
 if(state.locked)return;
 state.paused=true;
@@ -425,7 +494,9 @@ try{
 await state.sdk.auth.openAuthDialog();
 await cloudLoad();
 renderProfile();
-}catch{}
+}catch(error){
+console.warn("Auth error:",error);
+}
 }
 function handleVisibility(){
 if(document.hidden&&$("gameScreen").classList.contains("active")&&!state.locked){
@@ -444,8 +515,12 @@ document.addEventListener("contextmenu",e=>e.preventDefault());
 document.addEventListener("dragstart",e=>e.preventDefault());
 document.addEventListener("selectstart",e=>e.preventDefault());
 document.addEventListener("gesturestart",e=>e.preventDefault());
-document.addEventListener("touchmove",e=>{if(e.cancelable)e.preventDefault()},{passive:false});
-document.querySelectorAll(".difficulty-card").forEach(card=>card.addEventListener("click",()=>openLevels(card.dataset.difficulty)));
+document.addEventListener("touchmove",e=>{
+if(e.cancelable)e.preventDefault();
+},{passive:false});
+document.querySelectorAll(".difficulty-card").forEach(card=>{
+card.addEventListener("click",()=>openLevels(card.dataset.difficulty));
+});
 $("levelsBackButton").addEventListener("click",()=>showScreen("menuScreen"));
 $("gameBackButton").addEventListener("click",exitToLevels);
 $("pauseButton").addEventListener("click",pauseGame);
@@ -463,9 +538,25 @@ $("resultLevelsButton").addEventListener("click",()=>{
 $("resultModal").classList.remove("active");
 openLevels(state.difficulty);
 });
-$("sourceModal").addEventListener("click",e=>{if(e.target===$("sourceModal"))closeSource()});
-$("profileModal").addEventListener("click",e=>{if(e.target===$("profileModal"))$("profileModal").classList.remove("active")});
-$("pauseModal").addEventListener("click",e=>{if(e.target===$("pauseModal"))resumeGame()});
+$("sourceModal").addEventListener("click",e=>{
+if(e.target===$("sourceModal"))closeSource();
+});
+$("profileModal").addEventListener("click",e=>{
+if(e.target===$("profileModal"))$("profileModal").classList.remove("active");
+});
+$("pauseModal").addEventListener("click",e=>{
+if(e.target===$("pauseModal"))resumeGame();
+});
 $("resultModal").addEventListener("click",e=>e.stopPropagation());
-if(window.PkbSDK)window.setTimeout(initSDK,0);
+if(window.PkbSDK&&!window.pikabuSDKReady){
+window.pikabuSDKReady=new Promise(async resolve=>{
+try{
+const sdk=await PkbSDK.init();
+resolve(sdk);
+}catch(error){
+console.warn("SDK init error:",error);
+resolve(null);
+}
+});
+}
 boot();
